@@ -1,0 +1,16 @@
+# Environnement Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Outils
+.mypy_cache/
+.ruff_cache/
+
+# Datasets de benchmark (volumineux, retéléchargeables par 00-setup.sh)
+data/
+
+# IDE
+.idea/
+.DS_Store

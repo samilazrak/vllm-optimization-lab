@@ -1,0 +1,32 @@
+[project]
+name = "vllm-optimization-lab"
+version = "0.1.0"
+description = "Harnais de benchmark reproductible pour le serving LLM sur vLLM"
+requires-python = ">=3.12"
+# vLLM n'est pas listé ici : il s'installe sur le pod GPU par 00-setup.sh, avec
+# la roue qui correspond au CUDA de la machine. Les outils d'analyse tournent en
+# local, sans GPU, sur les JSON versionnés dans results/raw/.
+dependencies = [
+    "matplotlib>=3.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "mypy>=1.11.0",
+]
+
+[tool.setuptools]
+py-modules = []
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+ignore_missing_imports = true
