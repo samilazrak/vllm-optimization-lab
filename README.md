@@ -75,16 +75,38 @@ chargement soient comparables aux siennes : fixer `--max-model-len` changerait l
 concurrence annoncée et casserait la comparaison. Le réglage n'arrive qu'avec
 `tuned`.
 
-## Utilisation
+## Prérequis de l'hôte
 
-Sur un pod GPU (L40S 48 Go ou équivalent ; le modèle fp16 occupe 27,5 Go, donc
-24 Go ne suffisent pas) :
+Trois contraintes, apprises en brûlant trois pods loués avant d'en tenir un bon.
+`make setup` les vérifie et s'arrête net si l'une n'est pas remplie, parce que
+chacune se détecte en quelques secondes et coûte cher à découvrir plus tard.
+
+| Contrainte | Seuil | Ce qui arrive sinon |
+|---|---|---|
+| **VRAM** | 48 Go | Le modèle fp16 occupe 27,5 Go : sur 24 Go la baseline n'existe pas |
+| **Débit vers Hugging Face** | 20 Mo/s visés, 5 Mo/s minimum | À 0,5 Mo/s, les 28 Go de poids demandent 17 heures |
+| **CUDA supporté par le driver** | 13.0 pour vLLM 0.29 | `torch.cuda.is_available()` à `False`, rien ne tourne |
+
+La troisième est la moins évidente. Les wheels de vLLM sont compilées contre une
+version de CUDA précise, et entre 12.x et 13.x le saut est majeur : la
+compatibilité mineure ne joue plus, il faut un driver r580 ou plus récent. Sur
+RunPod, le filtre « Available CUDA versions » de la page de déploiement est le
+bon levier, et un hôte annonçant seulement 12.8 est à écarter.
+
+La version de vLLM est épinglée dans `00-setup.sh` (`VLLM_VERSION`, 0.29.0 par
+défaut). Un `pip install vllm` nu entre en conflit avec le torch préinstallé des
+images RunPod et fait reculer le résolveur jusqu'à des versions de 2025, où
+`vllm bench serve` n'existe pas encore.
+
+## Utilisation
 
 ```bash
 git clone https://github.com/samilazrak/vllm-optimization-lab && cd vllm-optimization-lab
-make setup    # nvidia-smi, installation de vLLM, téléchargement de ShareGPT
+make setup    # qualification de l'hôte, vLLM épinglé, ShareGPT
 make sweep    # la matrice complète, puis collect + report
 ```
+
+Pour passer outre les contrôles de qualification : `SKIP_HOST_CHECKS=1 make setup`.
 
 Un run isolé :
 
