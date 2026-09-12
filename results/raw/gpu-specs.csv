@@ -1,0 +1,2 @@
+name, compute_cap, memory.free [MiB], memory.used [MiB], memory.total [MiB], pstate
+NVIDIA L40S, 8.9, 45458 MiB, 0 MiB, 46068 MiB, P0
