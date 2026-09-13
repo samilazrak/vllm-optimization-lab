@@ -1,147 +1,156 @@
 # vllm-optimization-lab
 
-Un harnais de benchmark reproductible pour le **serving LLM sur vLLM** : une
-commande lance la matrice complète des configurations, sauvegarde les résultats
-bruts, et génère le rapport depuis les données.
+*[Version française](README.fr.md)*
 
-Le protocole reprend le chapitre 9 de *Hands-On LLM Serving and Optimization*
-(Chi Wang & Peiheng Hu, O'Reilly) : **Qwen3-14B sur un seul NVIDIA L40S 46 Go**.
-Les chiffres du livre sont posés en référence en face des mesures, avec la
-colonne d'écart. Projet d'apprentissage : le code est court et commenté.
+**The book's numbers reproduce to within 1 %. Its explanation of them does not
+survive the check.**
 
-La campagne a tourné, `results/` contient les mesures réelles, et elles
-reproduisent le livre de près tout en contredisant son explication principale.
+This repository re-runs the chapter 9 lab of *Hands-On LLM Serving and
+Optimization* (Chi Wang & Peiheng Hu, O'Reilly): Qwen3-14B on a single NVIDIA
+L40S 46 GB. AWQ quantization does deliver the throughput gain the chapter
+reports, 2.77× here. But the mechanism the chapter credits for it, a larger KV
+cache enabling bigger batches, is not what produced it: at `--max-concurrency
+10` the KV cache never went past **6 % of its usable capacity**, not even in the
+unquantized baseline. The gain comes from weight memory bandwidth during
+decoding, and the numbers pin it down to the decimal.
 
-## Environnement de mesure
+Reaching that conclusion took more than running `vllm bench serve`, which
+reports throughput and latency but says nothing about how GPU memory is split.
+That split is what explains the results, and it only exists in the server's
+startup logs. This harness parses it out and joins it to the benchmark metrics,
+which is what made the real bottleneck visible.
+
+One command runs the full configuration matrix, saves the raw results, and
+regenerates the report from the data. The code is short and commented.
+
+## Measurement environment
 
 | | |
 |---|---|
-| GPU | NVIDIA L40S, 46 068 MiB, compute capability 8.9 |
-| Pile | vLLM 0.29.0, torch 2.13.0+cu130, CUDA 13.0, driver 580.159.04 |
-| Hôte | RunPod, région EU-NL-1, 32 vCPU, 125 Go de RAM |
-| Modèles | `Qwen/Qwen3-14B` et `Qwen/Qwen3-14B-AWQ` |
-| Charge | 2 000 prompts ShareGPT et 1 000 prompts Prefix Repetition, `--max-concurrency 10` |
+| GPU | NVIDIA L40S, 46,068 MiB, compute capability 8.9 |
+| Stack | vLLM 0.29.0, torch 2.13.0+cu130, CUDA 13.0, driver 580.159.04 |
+| Host | RunPod, region EU-NL-1, 32 vCPU, 125 GB RAM |
+| Models | `Qwen/Qwen3-14B` and `Qwen/Qwen3-14B-AWQ` |
+| Load | 2,000 ShareGPT prompts and 1,000 Prefix Repetition prompts, `--max-concurrency 10` |
 
-Un point de méthode : la version de vLLM est nettement postérieure à celle du
-livre. Les écarts qui suivent sont donc à lire comme la robustesse du protocole
-à un changement de version, pas comme une réplication à l'identique.
+A methodological note: the vLLM version used here is substantially newer than
+the book's. The gaps below therefore measure how well the protocol holds up
+across versions, not an identical replication.
 
-## Résultats
+## Results
 
-### Débit et latence
+### Throughput and latency
 
-| Run | Total TPS | Output TPS | TTFT moy. | ITL moy. | TPS du livre | Écart |
+| Run | Total TPS | Output TPS | Mean TTFT | Mean ITL | Book TPS | Gap |
 |---|---|---|---|---|---|---|
-| `base__sharegpt` | 481,4 | 230,8 | 145,2 ms | 42,4 ms | 474,4 | +1 % |
-| `base__prefix` | 1 135,6 | 225,4 | 150,2 ms | 43,2 ms | 1 123,1 | +1 % |
-| `awq__sharegpt` | 1 334,2 | 640,1 | 75,6 ms | 15,2 ms | 1 280,0 | +4 % |
-| `awq__prefix` | 2 873,0 | 570,8 | 110,7 ms | 16,5 ms | n/a | n/a |
-| `tuned__sharegpt` | 1 335,3 | 639,8 | 73,8 ms | 15,2 ms | n/a | n/a |
-| `tuned__prefix` | 2 867,1 | 570,3 | 104,5 ms | 16,6 ms | n/a | n/a |
+| `base__sharegpt` | 481.4 | 230.8 | 145.2 ms | 42.4 ms | 474.4 | +1 % |
+| `base__prefix` | 1,135.6 | 225.4 | 150.2 ms | 43.2 ms | 1,123.1 | +1 % |
+| `awq__sharegpt` | 1,334.2 | 640.1 | 75.6 ms | 15.2 ms | 1,280.0 | +4 % |
+| `awq__prefix` | 2,873.0 | 570.8 | 110.7 ms | 16.5 ms | n/a | n/a |
+| `tuned__sharegpt` | 1,335.3 | 639.8 | 73.8 ms | 15.2 ms | n/a | n/a |
+| `tuned__prefix` | 2,867.1 | 570.3 | 104.5 ms | 16.6 ms | n/a | n/a |
 
 ![throughput](figures/throughput.png)
 
-Les totaux ne sont pas comparables entre les deux datasets : Prefix Repetition
-envoie 512 k tokens d'entrée pour 127 k de sortie, ShareGPT 447 k pour 412 k. Le
-« total token throughput » compte les deux, et un token d'entrée coûte bien moins
-cher qu'un token de sortie. **C'est l'output TPS qui compare les datasets**, et
-lui reste plat (230,8 contre 225,4 en base).
+Totals are not comparable across the two datasets: Prefix Repetition sends 512 k
+input tokens for 127 k output, ShareGPT 447 k for 412 k. Total token throughput
+counts both, and an input token is far cheaper than an output token. **Output
+TPS is the metric that compares datasets**, and it stays flat (230.8 against
+225.4 on the baseline).
 
-### Mémoire GPU au chargement
+### GPU memory at load time
 
-| Config | Poids | KV cache | Tokens cachables | Concurrence max |
+| Config | Weights | KV cache | Cacheable tokens | Max concurrency |
 |---|---|---|---|---|
-| `base` | 27,52 GiB | 11,06 GiB | 72 496 | 1,77× |
-| `awq` | 9,44 GiB | 29,09 GiB | 190 672 | 4,66× |
-| `tuned` | 9,44 GiB | 30,03 GiB | 196 784 | 4,80× |
+| `base` | 27.52 GiB | 11.06 GiB | 72,496 | 1.77× |
+| `awq` | 9.44 GiB | 29.09 GiB | 190,672 | 4.66× |
+| `tuned` | 9.44 GiB | 30.03 GiB | 196,784 | 4.80× |
 
-![memoire](figures/memoire.png)
+![memory](figures/memoire.png)
 
-La barre totale ne bouge pas, c'est la frontière à l'intérieur qui se déplace.
+The total bar barely moves; what shifts is the boundary inside it.
 
-## Ce que les mesures montrent
+## What the measurements show
 
-**1. AWQ multiplie le débit par 2,77, mais pas par le mécanisme annoncé.**
-Le livre explique le gain par la chaîne « moins de poids → plus de KV cache →
-plus de batching → plus de débit ». Les mesures valident les deux premiers
-maillons et invalident le troisième dans ces conditions : à `--max-concurrency
-10`, le KV cache n'a jamais été contraignant, même en baseline. Une requête
-ShareGPT pèse 429 tokens en moyenne, le cache de `base` en tient 72 496, soit
-**169 requêtes simultanées quand on en demande 10**. Le goulot est ailleurs :
+**1. AWQ multiplies throughput by 2.77, but not through the stated mechanism.**
+The book explains the gain as a chain: fewer weight bytes → more KV cache → more
+batching → more throughput. The measurements confirm the first two links and
+invalidate the third under these conditions. At `--max-concurrency 10` the KV
+cache was never the binding constraint, not even in the baseline. A ShareGPT
+request averages 429 tokens; the `base` cache holds 72,496 of them, which is
+**room for 169 concurrent requests when the benchmark asks for 10**. The
+bottleneck is elsewhere:
 
-| | `base` | `awq` | rapport |
+| | `base` | `awq` | ratio |
 |---|---|---|---|
-| Poids du modèle | 27,52 GiB | 9,44 GiB | **2,92×** |
-| ITL moyen | 42,4 ms | 15,2 ms | **2,79×** |
+| Model weights | 27.52 GiB | 9.44 GiB | **2.92×** |
+| Mean ITL | 42.4 ms | 15.2 ms | **2.79×** |
 
-Le décodage est borné par la bande passante mémoire sur la lecture des poids.
-Diviser les poids par 2,92 divise le temps par token par 2,79, et le débit total
-suit exactement (2,77×). Ici la quantification accélère le décodage ; elle
-n'a pas eu à débloquer le batching. L'expansion du cache (1,77× à 4,66× de
-concurrence soutenable) est réelle, mais ce protocole ne l'a jamais sollicitée.
+Decoding is bound by memory bandwidth on weight reads: every generated token
+requires reading the entire model. Dividing the weights by 2.92 divides
+per-token time by 2.79, and total throughput follows at exactly 2.77×. Here
+quantization accelerates decoding; it never had to unlock batching. The cache
+expansion (1.77× to 4.66× sustainable concurrency) is real, but this protocol
+never exercised it.
 
-**2. Le réglage manuel n'apporte rien.** `tuned` ajoute
+**2. Manual tuning changes nothing.** `tuned` adds
 `--gpu-memory-utilization 0.95`, `--enable-prefix-caching`,
 `--enable-chunked-prefill`, `--max-num-seqs 512`, `--max-num-batched-tokens 8192`
-et `--block-size 16`. Résultat : 1 335,3 contre 1 334,2 TPS, soit +0,08 %, dans le
-bruit. Deux causes se cumulent. Le prefix caching et le chunked prefill sont
-**activés par défaut depuis vLLM 0.29**, donc ces flags ne font que redemander
-l'existant. Et le seul gain réel, 0,94 GiB de KV cache supplémentaire, porte sur
-la ressource dont le point précédent montre qu'elle n'était pas le goulot.
+and `--block-size 16`. Result: 1,335.3 against 1,334.2 TPS, or +0.08 %, inside
+the noise. Two causes compound. Prefix caching and chunked prefill have been
+**on by default since vLLM 0.29**, so those flags only re-request what is
+already there. And the one real gain, 0.94 GiB of extra KV cache, applies to the
+resource the previous point shows was not the bottleneck.
 
-**3. Le prefix caching fonctionne et reste invisible sur le débit.** Les logs du
-serveur donnent un taux de réutilisation cumulé de 0,2 % à la fin de la phase
-ShareGPT, et 49,5 % à la fin de la phase Prefix Repetition, ce qui situe la
-phase prefix seule autour de 90 %. Le cache a donc bien opéré. Mais il ne touche
-que le prefill, qui pèse 145 ms face à environ 8,6 s de décodage par requête : le
-TTFT de `base__prefix` reste à 150 ms pour 512 tokens d'entrée, contre 145 ms
-pour 223 tokens sans cache. Économiser du prefill ne se voit pas sur une charge
-dominée par le décodage.
+**3. Prefix caching works and stays invisible in throughput.** Server logs give
+a cumulative reuse rate of 0.2 % at the end of the ShareGPT phase and 49.5 % at
+the end of the Prefix Repetition phase, which puts the prefix phase alone around
+90 %. The mechanism clearly fired. But it only touches prefill, which costs
+145 ms against roughly 8.6 s of decoding per request: TTFT on `base__prefix`
+stays at 150 ms for 512 input tokens, against 145 ms for 223 tokens with no
+cache. Saving prefill does not show up on a decode-dominated workload.
 
-**4. Le multi-GPU dépend de l'interconnexion, pas du GPU.** Non reproduit ici,
-voir [docs/findings.md](docs/findings.md).
+**4. Distributed serving depends on the interconnect, not the GPU.** Not
+reproduced here, see [docs/findings.md](docs/findings.md).
 
-## Écarts au livre
+## Divergences from the book
 
-La reproduction du profil mémoire est presque exacte, malgré une version de vLLM
-très postérieure :
+The memory profile reproduces almost exactly, despite a much newer vLLM:
 
-| Mesure | Ce dépôt | Livre | Écart |
+| Measurement | This repo | Book | Gap |
 |---|---|---|---|
-| Poids `base` | 27,52 GiB | 27,5185 GiB | identique |
-| KV cache `base` | 11,06 GiB | 11,00 GiB | +0,5 % |
-| Tokens cachables `base` | 72 496 | 72 064 | +0,6 % |
-| Concurrence max `base` | 1,77× | 1,76× | +0,6 % |
-| Poids `awq` | 9,44 GiB | 9,36 GiB | +0,9 % |
-| Tokens cachables `awq` | 190 672 | 191 056 | -0,2 % |
+| `base` weights | 27.52 GiB | 27.5185 GiB | identical |
+| `base` KV cache | 11.06 GiB | 11.00 GiB | +0.5 % |
+| `base` cacheable tokens | 72,496 | 72,064 | +0.6 % |
+| `base` max concurrency | 1.77× | 1.76× | +0.6 % |
+| `awq` weights | 9.44 GiB | 9.36 GiB | +0.9 % |
+| `awq` cacheable tokens | 190,672 | 191,056 | -0.2 % |
 
-C'est attendu une fois qu'on voit d'où viennent ces nombres : ils sont dictés par
-la taille du modèle et celle de la carte, pas par la version du serveur. Le
-serveur n'intervient que sur la marge qu'il se réserve, et celle-ci a très peu
-bougé.
+That is expected once you see where these numbers come from: they are dictated
+by model size and card size, not by the server version. The server only decides
+the margin it reserves for itself, and that margin has barely moved.
 
-Les débits tiennent aussi, à +1 % sur les deux runs `base` et +4 % sur
-`awq__sharegpt`. L'ITL suit (42,4 ms contre 43,2 chez les auteurs sur
-`base__sharegpt`), ce qui indique que l'exécution du modèle elle-même est
-identique.
+Throughput holds too, at +1 % on both `base` runs and +4 % on `awq__sharegpt`.
+ITL follows (42.4 ms against the authors' 43.2 on `base__sharegpt`), which
+places model execution at the same level.
 
-**Une métrique ne se reproduit pas : le TTFT.** 145,2 ms contre 104,2 chez les
-auteurs sur `base__sharegpt`, et 75,6 contre 59,3 sur `awq__sharegpt`, soit +30 à
-+40 %. Comme le débit et l'ITL tombent juste, l'écart ne vient pas du GPU : il se
-situe du côté de l'admission des requêtes, du tokenizer ou de l'hôte, pas du
-décodage. Faute d'avoir instrumenté cette partie, la cause reste non identifiée,
-et c'est signalé comme tel plutôt que lissé.
+**One metric does not reproduce: TTFT.** 145.2 ms against the authors' 104.2 on
+`base__sharegpt`, and 75.6 against 59.3 on `awq__sharegpt`, so +27 % to +39 %.
+Since throughput and ITL land on target, the gap is not the GPU: it sits on the
+request admission path, the tokenizer or the host, not in decoding. That part
+was not instrumented during the campaign, so the cause is unknown. It is
+recorded as an unresolved divergence rather than smoothed over.
 
-**Le vrai écart n'est pas numérique, il est explicatif.** Les chiffres du livre
-se reproduisent ; son interprétation du gain AWQ ne survit pas à la
-vérification, parce que le protocole plafonne la concurrence à 10 et ne met
-jamais le KV cache sous pression.
+**The real gap is not numerical, it is explanatory.** The book's numbers
+reproduce; its interpretation of the AWQ gain does not survive verification,
+because the protocol caps concurrency at 10 and never puts the KV cache under
+pressure.
 
-## Le point technique du harnais
+## The technical point of the harness
 
-`vllm bench serve` mesure le throughput et la latence, mais ne dit rien de la
-répartition de la mémoire GPU. Or c'est elle qui explique les résultats. Ces
-chiffres ne vivent que dans les logs de chargement :
+`vllm bench serve` measures throughput and latency but says nothing about how
+GPU memory is split. That split is what explains the results, and those numbers
+live only in the startup logs:
 
 ```
 Model loading took 27.52 GiB memory and 51.881960 seconds
@@ -150,74 +159,71 @@ GPU KV cache size: 72,496 tokens
 Maximum concurrency for 40,960 tokens per request: 1.77x
 ```
 
-[`src/lab/parse_startup.py`](src/lab/parse_startup.py) les extrait,
-[`collect.py`](src/lab/collect.py) les joint aux métriques de bench par
-configuration. C'est cette jointure qui permet de mettre le throughput en face de
-la taille de KV cache censée le plafonner, au lieu de constater un gain sans
-pouvoir l'expliquer. Sans elle, le constat n°1 ci-dessus était hors de portée :
-c'est en divisant les tokens cachables par la longueur moyenne des requêtes que
-le vrai goulot apparaît.
+[`src/lab/parse_startup.py`](src/lab/parse_startup.py) extracts them and
+[`collect.py`](src/lab/collect.py) joins them to the benchmark metrics per
+configuration. That join is what puts throughput next to the KV cache size
+supposed to cap it, instead of observing a gain with no way to explain it.
+Without it, finding #1 above was out of reach: dividing cacheable tokens by mean
+request length is what exposes the real bottleneck.
 
-## La matrice
+## The matrix
 
-| `run_id` | Modèle | Dataset | Flags |
+| `run_id` | Model | Dataset | Flags |
 |---|---|---|---|
-| `base__sharegpt` | Qwen3-14B | ShareGPT | défauts vLLM |
-| `base__prefix` | Qwen3-14B | Prefix Repetition | défauts vLLM |
+| `base__sharegpt` | Qwen3-14B | ShareGPT | vLLM defaults |
+| `base__prefix` | Qwen3-14B | Prefix Repetition | vLLM defaults |
 | `awq__sharegpt` | Qwen3-14B-AWQ | ShareGPT | `--quantization awq` |
 | `awq__prefix` | Qwen3-14B-AWQ | Prefix Repetition | `--quantization awq` |
-| `tuned__sharegpt` | Qwen3-14B-AWQ | ShareGPT | + prefix caching, chunked prefill, batching et cache élargis |
-| `tuned__prefix` | Qwen3-14B-AWQ | Prefix Repetition | idem |
+| `tuned__sharegpt` | Qwen3-14B-AWQ | ShareGPT | + prefix caching, chunked prefill, wider batching and cache |
+| `tuned__prefix` | Qwen3-14B-AWQ | Prefix Repetition | same |
 
-Les deux datasets ne mesurent pas la même chose. **ShareGPT** est du trafic réel,
-aux longueurs très dispersées, ce qui est précisément le cas que le continuous
-batching sert à absorber. **Prefix Repetition** est synthétique et sert de sonde
-de cache : moins il y a de préfixes uniques, plus le signal de réutilisation est
-fort.
+The two datasets do not measure the same thing. **ShareGPT** is real traffic with
+widely scattered lengths, which is exactly the case continuous batching exists to
+absorb. **Prefix Repetition** is synthetic and acts as a cache probe: the fewer
+unique prefixes, the stronger the reuse signal.
 
-`base` et `awq` tournent aux **flags par défaut**, comme dans le livre
-(`vllm serve Qwen/Qwen3-14B`). C'est la condition pour que les lignes de
-chargement soient comparables aux siennes : fixer `--max-model-len` changerait la
-concurrence annoncée et casserait la comparaison. Le réglage n'arrive qu'avec
-`tuned`.
+`base` and `awq` run on **default flags**, as in the book
+(`vllm serve Qwen/Qwen3-14B`). That is the condition for the load-time log lines
+to stay comparable to the authors': pinning `--max-model-len` would change the
+reported concurrency and break the comparison. Tuning only enters with `tuned`.
 
-La matrice complète prend environ deux heures sur un L40S, dont 30 minutes pour
-le seul `base__sharegpt`.
+The full matrix takes about two hours on an L40S, 30 minutes of which go to
+`base__sharegpt` alone.
 
-## Prérequis de l'hôte
+## Host requirements
 
-Trois contraintes, apprises en brûlant trois pods loués avant d'en tenir un bon.
-`make setup` les vérifie et s'arrête net si l'une n'est pas remplie, parce que
-chacune se détecte en quelques secondes et coûte cher à découvrir plus tard.
+Three constraints, learned by burning three rented pods before landing a good
+one. `make setup` checks them and stops dead if one fails, because each takes
+seconds to detect and is expensive to discover later.
 
-| Contrainte | Seuil | Ce qui arrive sinon |
+| Constraint | Threshold | What happens otherwise |
 |---|---|---|
-| **VRAM** | 48 Go | Le modèle fp16 occupe 27,5 Go : sur 24 Go la baseline n'existe pas |
-| **Débit vers Hugging Face** | 20 Mo/s visés, 5 Mo/s minimum | À 0,5 Mo/s, les 28 Go de poids demandent 17 heures |
-| **CUDA supporté par le driver** | 13.0 pour vLLM 0.29 | `torch.cuda.is_available()` à `False`, rien ne tourne |
+| **VRAM** | 48 GB | The fp16 model takes 27.5 GB: on 24 GB the baseline does not exist |
+| **Bandwidth to Hugging Face** | 20 MB/s target, 5 MB/s floor | At 0.5 MB/s, 28 GB of weights take 17 hours |
+| **CUDA supported by the driver** | 13.0 for vLLM 0.29 | `torch.cuda.is_available()` returns `False`, nothing runs |
 
-La troisième est la moins évidente. Les wheels de vLLM sont compilées contre une
-version de CUDA précise, et entre 12.x et 13.x le saut est majeur : la
-compatibilité mineure ne joue plus, il faut un driver r580 ou plus récent. Sur
-RunPod, le filtre « Available CUDA versions » de la page de déploiement est le
-bon levier, et un hôte annonçant seulement 12.8 est à écarter.
+The third is the least obvious. vLLM wheels are compiled against a specific CUDA
+version, and 12.x to 13.x is a major jump: minor-version compatibility no longer
+applies, and an r580 or newer driver is required. On RunPod, the "Available CUDA
+versions" filter on the deployment page is the right lever, and a host
+advertising only 12.8 should be skipped.
 
-La version de vLLM est épinglée dans `00-setup.sh` (`VLLM_VERSION`, 0.29.0 par
-défaut). Un `pip install vllm` nu entre en conflit avec le torch préinstallé des
-images RunPod et fait reculer le résolveur jusqu'à des versions de 2025, où
-`vllm bench serve` n'existe pas encore.
+The vLLM version is pinned in `00-setup.sh` (`VLLM_VERSION`, 0.29.0 by default).
+A bare `pip install vllm` conflicts with the torch preinstalled in RunPod images
+and makes the resolver backtrack to 2025 releases, where `vllm bench serve` does
+not exist yet.
 
-## Utilisation
+## Usage
 
 ```bash
 git clone https://github.com/samilazrak/vllm-optimization-lab && cd vllm-optimization-lab
-make setup    # qualification de l'hôte, vLLM épinglé, ShareGPT
-make sweep    # la matrice complète, puis collect + report
+make setup    # host qualification, pinned vLLM, ShareGPT
+make sweep    # the full matrix, then collect + report
 ```
 
-Pour passer outre les contrôles de qualification : `SKIP_HOST_CHECKS=1 make setup`.
+To bypass the qualification gates: `SKIP_HOST_CHECKS=1 make setup`.
 
-Un run isolé :
+A single run:
 
 ```bash
 make serve CONFIG=awq
@@ -225,7 +231,7 @@ make bench CONFIG=awq DATASET=sharegpt
 make stop
 ```
 
-L'analyse ne demande pas de GPU et se relance partout, sur les JSON versionnés :
+The analysis needs no GPU and replays anywhere, on the versioned JSON:
 
 ```bash
 uv venv && uv pip install -e .
@@ -233,44 +239,43 @@ make collect   # results/raw/*.json → results/summary.csv
 make report    # results/summary.csv → results/report.md + figures/
 ```
 
-## Structure
+## Layout
 
-| Chemin | Rôle |
+| Path | Role |
 |---|---|
-| [`scripts/00-setup.sh`](scripts/00-setup.sh) | Étapes 1 et 2 : matériel, vLLM, datasets |
-| [`scripts/01-serve.sh`](scripts/01-serve.sh) | Étape 4 : serveur paramétré, capture des logs de chargement |
-| [`scripts/02-bench.sh`](scripts/02-bench.sh) | Étapes 5 et 6 : trafic et métriques |
-| [`scripts/03-sweep.sh`](scripts/03-sweep.sh) | La matrice de bout en bout, sans surveillance |
-| [`src/lab/parse_startup.py`](src/lab/parse_startup.py) | Extraction des chiffres mémoire des logs vLLM |
-| [`src/lab/collect.py`](src/lab/collect.py) | Jointure bench + chargement → `results/summary.csv` |
-| [`src/lab/report.py`](src/lab/report.py) | Tableaux comparatifs et figures |
-| [`results/summary.csv`](results/summary.csv) | Les 6 runs, une ligne chacun |
-| [`results/report.md`](results/report.md) | Rapport généré |
-| `results/raw/` | JSON de bench et logs de démarrage, versionnés |
-| [`docs/findings.md`](docs/findings.md) | Interprétation, écarts au livre, ce qui n'est pas reproduit |
+| [`scripts/00-setup.sh`](scripts/00-setup.sh) | Steps 1 and 2: hardware, vLLM, datasets |
+| [`scripts/01-serve.sh`](scripts/01-serve.sh) | Step 4: parameterized server, load-log capture |
+| [`scripts/02-bench.sh`](scripts/02-bench.sh) | Steps 5 and 6: traffic and metrics |
+| [`scripts/03-sweep.sh`](scripts/03-sweep.sh) | The matrix end to end, unattended |
+| [`src/lab/parse_startup.py`](src/lab/parse_startup.py) | Pulls memory figures out of vLLM logs |
+| [`src/lab/collect.py`](src/lab/collect.py) | Joins bench + load logs → `results/summary.csv` |
+| [`src/lab/report.py`](src/lab/report.py) | Comparison tables and figures |
+| [`results/summary.csv`](results/summary.csv) | The 6 runs, one row each |
+| [`results/report.md`](results/report.md) | Generated report |
+| `results/raw/` | Bench JSON and startup logs, versioned |
+| [`docs/findings.md`](docs/findings.md) | Interpretation, gaps to the book, what is not reproduced |
 
-## Limites
+## Limitations
 
-- **La concurrence est plafonnée à 10 côté client.** C'est la limite qui pèse le
-  plus sur les conclusions : elle laisse le KV cache à 6 % de sa capacité utile
-  et empêche donc de mesurer l'effet que le livre attribue à la quantification.
-  Pour le tester il faudrait monter `--max-concurrency` au-delà de 170 sur
-  ShareGPT, ou allonger fortement les contextes.
-- **Le serving distribué (étape 8 du livre) n'est pas reproduit.** Il demande deux
-  pods multi-GPU aux interconnexions différentes. Les configs `tp2` et `tp4`
-  existent dans `01-serve.sh` mais ne sont pas dans la matrice par défaut. Le
-  raisonnement et les chiffres du livre sont dans `docs/findings.md`, présentés
-  comme tels et non comme des mesures.
-- **La qualité du modèle quantifié n'est pas évaluée.** Le lab mesure le débit,
-  pas la dégradation en 4 bits. Un throughput multiplié par 2,77 ne dit rien de ce
-  qu'on perd en précision.
-- **Chaque point est un run unique.** Pas de répétition, donc pas de mesure de
-  dispersion. Les écarts de l'ordre du pourcent ci-dessus sont à lire avec cette
-  réserve.
-- **Les résultats ne valent que pour ce GPU et ce trafic.** C'est le fond du
-  chapitre : une configuration surajustée ne se généralise pas.
+- **Concurrency is capped at 10 on the client side.** This is the limitation that
+  weighs most on the conclusions: it leaves the KV cache at 6 % of its usable
+  capacity and therefore prevents measuring the effect the book attributes to
+  quantization. Testing it would mean pushing `--max-concurrency` past 170 on
+  ShareGPT, or lengthening contexts substantially.
+- **Distributed serving (step 8 of the book) is not reproduced.** It requires two
+  multi-GPU pods with different interconnects. The `tp2` and `tp4` configs exist
+  in `01-serve.sh` but are not in the default matrix. The reasoning and the
+  book's numbers are in `docs/findings.md`, presented as such and never as
+  measurements.
+- **Quantized model quality is not evaluated.** The lab measures throughput, not
+  4-bit degradation. A 2.77× throughput gain says nothing about the precision
+  cost.
+- **Every data point is a single run.** No repetition, so no dispersion measure.
+  The percent-level gaps above should be read with that caveat.
+- **Results hold only for this GPU and this traffic.** That is the point of the
+  chapter: an overfitted configuration does not generalize.
 
-## Référence
+## Reference
 
 Chi Wang, Peiheng Hu, *Hands-On LLM Serving and Optimization*, O'Reilly,
-chapitre 9 « LLM Optimization in Practice ».
+chapter 9, "LLM Optimization in Practice".
