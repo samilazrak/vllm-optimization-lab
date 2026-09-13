@@ -102,9 +102,10 @@ tient. C'est la suite naturelle de ce lab.
 | ShareGPT | 1 334,2 TPS | 1 335,3 TPS | +0,08 % |
 | Prefix Repetition | 2 873,0 TPS | 2 867,1 TPS | -0,2 % |
 
-`tuned` ajoute pourtant cinq flags : `--gpu-memory-utilization 0.95`,
+`tuned` ajoute pourtant six flags : `--gpu-memory-utilization 0.95`,
 `--enable-prefix-caching`, `--enable-chunked-prefill`, `--max-num-seqs 512`,
-`--max-num-batched-tokens 8192`. Deux causes se cumulent pour annuler leur effet.
+`--max-num-batched-tokens 8192` et `--block-size 16`. Deux causes se cumulent
+pour annuler leur effet.
 
 **Le prefix caching et le chunked prefill sont activés par défaut depuis vLLM
 0.29.** Les demander explicitement ne change rien : `base` en bénéficiait déjà,

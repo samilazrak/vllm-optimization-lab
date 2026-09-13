@@ -82,12 +82,12 @@ concurrence soutenable) est réelle, mais ce protocole ne l'a jamais sollicitée
 
 **2. Le réglage manuel n'apporte rien.** `tuned` ajoute
 `--gpu-memory-utilization 0.95`, `--enable-prefix-caching`,
-`--enable-chunked-prefill`, `--max-num-seqs 512` et `--max-num-batched-tokens
-8192`. Résultat : 1 335,3 contre 1 334,2 TPS, soit +0,08 %, dans le bruit. Deux
-causes se cumulent. Le prefix caching et le chunked prefill sont **activés par
-défaut depuis vLLM 0.29**, donc ces flags ne font que redemander l'existant. Et
-le seul gain réel, 0,94 GiB de KV cache supplémentaire, porte sur la ressource
-dont le point précédent montre qu'elle n'était pas le goulot.
+`--enable-chunked-prefill`, `--max-num-seqs 512`, `--max-num-batched-tokens 8192`
+et `--block-size 16`. Résultat : 1 335,3 contre 1 334,2 TPS, soit +0,08 %, dans le
+bruit. Deux causes se cumulent. Le prefix caching et le chunked prefill sont
+**activés par défaut depuis vLLM 0.29**, donc ces flags ne font que redemander
+l'existant. Et le seul gain réel, 0,94 GiB de KV cache supplémentaire, porte sur
+la ressource dont le point précédent montre qu'elle n'était pas le goulot.
 
 **3. Le prefix caching fonctionne et reste invisible sur le débit.** Les logs du
 serveur donnent un taux de réutilisation cumulé de 0,2 % à la fin de la phase
@@ -166,7 +166,7 @@ le vrai goulot apparaît.
 | `base__prefix` | Qwen3-14B | Prefix Repetition | défauts vLLM |
 | `awq__sharegpt` | Qwen3-14B-AWQ | ShareGPT | `--quantization awq` |
 | `awq__prefix` | Qwen3-14B-AWQ | Prefix Repetition | `--quantization awq` |
-| `tuned__sharegpt` | Qwen3-14B-AWQ | ShareGPT | + prefix caching, chunked prefill, batching élargi |
+| `tuned__sharegpt` | Qwen3-14B-AWQ | ShareGPT | + prefix caching, chunked prefill, batching et cache élargis |
 | `tuned__prefix` | Qwen3-14B-AWQ | Prefix Repetition | idem |
 
 Les deux datasets ne mesurent pas la même chose. **ShareGPT** est du trafic réel,
